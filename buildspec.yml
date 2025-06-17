@@ -1,0 +1,28 @@
+project:
+  description: SQS::Queue::Processor
+  author:
+    name: Rob Lauer
+    mailto: rclauer@gmail.com
+pm_module: SQS::Queue::Processor
+min-perl-version: 5.010
+dependencies:
+  requires: requires
+  test_requires: test-requires
+path:
+  pm_module: lib
+  scripts: bin
+  tests: t
+extra-files:
+  - postamble
+  - share:
+    - README.md
+    - ChangeLog
+resources:
+  homepage: http://github.com/rlauer6/SQS-Queue-Processor
+  bugtracker:
+    web: http://github.com/rlauer6/SQS-Queue-Processor
+    mailto: rclauer@gmail.com
+  repository:
+    url: git://github.com/rlauer6/SQS-Queue-Processor
+    web: http://github.com/rlauer6/SQS-Queue-Processor
+    type: 'git'

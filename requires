@@ -1,0 +1,11 @@
+Amazon::API::SQS        2.1.3
+Class::Accessor::Fast   0.51
+JSON                    4.10
+Log::Log4perl           1.57
+Log::Log4perl::Level    0
+Proc::Daemon         0.23
+Proc::PID::File      1.27
+Query::Param            0.01
+Readonly             2.05
+Redis                1.995
+URI::Escape          5.31

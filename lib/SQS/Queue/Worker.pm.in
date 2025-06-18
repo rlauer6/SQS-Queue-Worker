@@ -1,0 +1,556 @@
+package SQS::Queue::Worker;
+
+# +------------------------------------------------+
+# | (c) Copyright 2025, TBC DevelopmentGroup, LLC  |
+# |              All Rights reserved.              |
+# +------------------------------------------------+
+
+use strict;
+use warnings;
+
+use Amazon::API::SQS;
+use Carp;
+use Data::Dumper;
+use English qw(-no_match_vars);
+use JSON;
+use List::Util qw(pairs);
+use Log::Log4perl qw(:easy);
+use Log::Log4perl::Level;
+use Query::Param;
+use Scalar::Util qw(blessed);
+use SQS::Queue::Constants qw(:all);
+use YAML::Tiny;
+
+our $VERSION = $SQS::Queue::Constants::VERSION;
+
+__PACKAGE__->follow_best_practice;
+__PACKAGE__->mk_accessors(
+  qw(
+    body
+    config
+    endpoint_url
+    last_message
+    log4perl_conf
+    log_level
+    log_path
+    logger
+    max_children
+    md5_of_body
+    max_sleep_period
+    message_params
+    message_id
+    poll_interval
+    queue_url
+    receipt_handle
+    retry_visibility_timeout
+    sqs_client
+    visibility_timeout
+    worker
+  )
+);
+
+use parent qw(Class::Accessor::Fast Exporter);
+
+our @EXPORT = qw(fetch_config create_sqs_message parse_message);
+
+########################################################################
+sub fetch_config {
+########################################################################
+  my ($config_file) = @_;
+
+  return
+    if !$config_file;
+
+  open my $fh, '<', $config_file
+    or croak "could not open $config_file for reading\n";
+
+  local $RS = undef;
+
+  my $content = <$fh>;
+
+  close $fh;
+
+  my $config = $content =~ /^\s*[{]/xsm ? from_json($content) : YAML::Tiny->read($config_file);
+
+  if ( $config->{log4perl_conf} && ref $config->{log4perl_conf} ) {
+    $config->{log4perl_conf} = join "\n", @{ $config->{log4perl_conf} };
+  }
+
+  return $config;
+}
+
+########################################################################
+sub merge_config {
+########################################################################
+  my ( $self, $config ) = @_;
+
+  foreach my $k ( keys %{$config} ) {
+    $self->set( $k, $config->{$k} );
+  }
+
+  return;
+}
+
+########################################################################
+sub new {
+########################################################################
+  my ( $class, @args ) = @_;
+
+  my $options = ref $args[0] ? $args[0] : {@args};
+
+  my $self = $class->SUPER::new($options);
+
+  my $config = fetch_config( $self->get_config );
+  $self->merge_config($config);
+
+  croak "queue_url is a required option\n"
+    if !$self->get_queue_url;
+
+  return $self;
+}
+
+########################################################################
+sub init {
+########################################################################
+  my ($self) = @_;
+
+  $self->init_logger;
+
+  $self->get_logger->info( 'Logging initialized at %s level', $self->get_log_level );
+
+  my $sqs_client = Amazon::API::SQS->new(
+    logger    => $self->get_logger,
+    log_level => $self->get_log_level,
+    url       => $self->get_endpoint_url
+  );
+
+  $self->set_sqs_client($sqs_client);
+
+  return $self;
+}
+
+########################################################################
+sub handler {
+########################################################################
+  my ($self) = @_;
+
+  $self->get_logger->info( Dumper( $self->get_last_message ) );
+
+  return $TRUE;
+}
+
+########################################################################
+sub init_logger {
+########################################################################
+  my ($self) = @_;
+
+  my $log_level = $self->get_log_level;
+  $log_level //= 'info';
+
+  $self->set_log_level( lc $log_level );
+
+  my $log4perl_level = $LOG4PERL_LEVELS{ lc $log_level };
+
+  $log4perl_level //= $INFO;
+
+  # default config
+  my $log4perl_config = $self->get_log4perl_conf;
+
+  if ($log4perl_config) {
+    Log::Log4perl->init($log4perl_config);
+  }
+  else {
+    Log::Log4perl->easy_init( $log4perl_level // $INFO );
+  }
+
+  my $logger = Log::Log4perl->get_logger();
+
+  if ($log4perl_level) {
+    $logger->level($log4perl_level);
+  }
+
+  $self->set_logger($logger);
+
+  return $self;
+}
+
+########################################################################
+sub create_sqs_message {
+########################################################################
+  my (@args) = @_;
+
+  return to_json( $args[0] )
+    if ref $args[0];
+
+  my @params;
+
+  foreach my $p ( pairs @args ) {
+    my ( $k, $v ) = @{$p};
+    push @params, sprintf '%s=%s', $k, uri_escape($v);
+  }
+
+  return join &AMPERSAND, @params;
+}
+
+########################################################################
+sub parse_message {
+########################################################################
+  my ($self) = @_;
+
+  my $body = blessed $self ? $self->get_body : $self;
+
+  my $params = eval {
+
+    # see if JSON string or CGI query string
+    if ( $body =~ /\s*[{]/xsm ) {
+      return from_json($body);
+    }
+    else {
+      return Query::Param->new($body)->params();
+    }
+  };
+
+  if ( !$params || $EVAL_ERROR ) {
+    warn "error parsing message: $EVAL_ERROR";
+  }
+
+  if ( blessed $self ) {
+    $self->set_message_params($params);
+  }
+
+  return $params;
+}
+
+########################################################################
+sub read_message {
+########################################################################
+  my ($self) = @_;
+
+  my $sqs_client = $self->get_sqs_client;
+
+  my $message = $sqs_client->ReceiveMessage( { QueueUrl => $self->get_queue_url, } );
+
+  return
+    if !keys %{$message};
+
+  if ( ref $message ) {
+    $message = $message->{Messages}->[0];
+    $self->set_last_message($message);
+
+    $self->set_body( $message->{Body} );
+    $self->set_message_id( $message->{MessageId} );
+    $self->set_md5_of_body( $message->{MD5OfBody} );
+    $self->set_receipt_handle( $message->{ReceiptHandle} );
+  }
+
+  return $message;
+}
+
+########################################################################
+sub delete_message {
+########################################################################
+  my ($self) = @_;
+
+  my $rsp = $self->get_sqs_client->DeleteMessage(
+    { QueueUrl      => $self->get_queue_url,
+      ReceiptHandle => $self->get_receipt_handle,
+    }
+  );
+
+  foreach (qw(body message_id receipt_handle md5_of_body)) {
+    $self->set( $_, undef );
+  }
+
+  return $rsp;
+}
+
+########################################################################
+sub change_message_visibility {
+########################################################################
+  my ( $self, $timeout ) = @_;
+
+  my $rsp = $self->get_sqs_client->ChangeMessageVisibility(
+    { QueueUrl          => $self->get_queue_url,
+      ReceiptHandle     => $self->get_receipt_handle,
+      VisibilityTimeout => $timeout
+    }
+  );
+
+  $self->logger->debug( sprintf 'ChangeMessageVisibility response: %s', Dumper $rsp );
+
+  return $rsp;
+}
+
+########################################################################
+sub DESTROY {
+########################################################################
+  my ($self) = @_;
+
+  return;
+}
+
+1;
+
+__END__
+
+=pod
+
+=head1 NAME
+
+SQS::Queue::Worker - parent class for queue processing handlers.
+
+=head1 SYNOPSIS
+
+ package SQS::Queue::Worker::FumanQueue
+ 
+ use parent qw(SQS::Queue::Worker);
+ 
+ sub handler {
+   my ($self) = @_;
+
+   my $message = $self->get_last_message();
+   my $body = $self->get_body;
+   
+   # or
+   $self->parse_message();
+   my $params = $self->get_message_params();
+
+   return 1;
+ }
+
+ 1;
+
+=head1 DESCRIPTION
+
+L<SQS::Queue::Worker> is a base class for writing Amazon Simple Queue
+Service (SQS) message handlers.
+
+=head1 VERSION
+
+This documentation refers to version @PACKAGE_VERSION@.
+
+=head1 NOTES
+
+This base class is one element in a simple architecture to handle
+messages from the SQS queue. Follow the cookbook below to implement
+additional handlers for your workflow.
+
+=over 5
+
+=item 1. Create an SQS queue
+
+Using the CLI or console create an SQS queue.
+
+=item 2. Configure the queue
+
+You can specify various default behaviors for the queue with regard to
+the timing of messages on the AWS Management Console.
+
+=over 5
+
+=item * Visibility Timeout
+
+This specifies the amount of time that the handler has to handle the
+message before it becomes visible again on the queue.  When an SQS
+message is read from the queue, SQS will lock the message and prevent
+other handlers from reading it for some period of time that you define
+(the default is 30s).
+
+Once a handler is presented witht the message it needs to handle the
+message, delete it from the queue or extend the visibility timeout
+otherwise the message will become available to the next process that
+reads from the queue.
+
+=item * Delivery Delay
+
+This parameter specifies the amount of time between message
+deliveries.  If, for some reason you want to meter your handling of
+messages, you can configure a delay that SQS will employ before the
+next message becomes available.  This might be handly for example, if
+you have some rogue program that is inadervantly bombarding your
+application with messages.
+
+=back
+
+=item 3. Create a configuration file
+
+A configuration file can be used to specify the AWS parameters
+including queue definitions. It can be in YAML or JSON format.
+ 
+ ---
+ queue_url: http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/fumanqueue
+ log_path: /tmp
+ visibility_timeout: 20
+ max_children: 3
+ poll_interval: 1
+ worker: FumanQueue
+ log_level: info
+ log4perl_conf:
+   - log4perl.rootLogger = INFO, LOGFILE
+   - log4perl.appender.LOGFILE = Log::Log4perl::Appender::File
+   - log4perl.appender.LOGFILE.filename = /var/log/sqs-fumanqueue
+   - log4perl.appender.LOGFILE.mode = append
+   - log4perl.appender.LOGFILE.layout = PatternLayout
+   - log4perl.appender.LOGFILE.layout.ConversionPattern = [%d] %p %m%n
+
+The important element here is the C<queue_url>.  You can also override
+the visibility timeout and the C<Log::Log4perl> parameters if you'd
+like - they should match what you have configured on the console.
+
+=item 4. Design your messages
+
+Messages are expected to be formatted as query string arguments or
+JSON payloads. Use the C<parse_message()> method to create a hash of
+the message payload. If you don't want to use query string parameters
+or a JSON payload you can get the message body using the C<get_body()>
+method.
+
+=item 5. Write your handler
+
+You use the C<SQS::Queue::Worker> as your base class and provide your
+own implemenation of the C<handler()> method. See L</SYNOPSIS>. Handler classes should be name using the convention:
+
+ SQS::Queue::Worker::{worker-name}
+
+Example: SQS::Queue::Worker::FumanQueue
+
+Your C<handler()> method should return a boolean value to indicate
+whether the message was handled properly and can be deleted from the
+queue. Returning a false value will cause the message to re-appear in
+the queue after the visibility timeout has elapsed.
+
+=item 6. Daemonize your handler
+
+The Perl script F<sqs-queue-processor.pl> acts as a
+driver for reading the queue and deliverying messages to your handler.
+It does this by instantiating your Perl class based on the argument
+C<worker> value in your configuration.
+
+ sudo sqs-queue-processor.pl --config /etc/sqs-fumanqueue.yml
+
+=item TBD - systemctl invocataion
+
+=back
+
+=head1 METHODS AND SUBROUTINES
+
+=head2 new
+
+ new()
+
+=head1 LOGGING METHODS
+
+=head2 init_logger
+
+Initializes a C<Log::Log4perl> log file.
+
+=head2 get_logger
+
+Returns the current logging object.
+
+=head1 QUEUE METHODS
+
+=head2 get_queue_url, set_queue_url
+
+Returns the current queue URL.
+
+=head2 get_poll_interval, set_poll_interval
+
+ get_poll_interval()
+
+=head2 get_max_sleep_period, set_max_sleep_period
+
+Returns the max sleep period.  The system will increment the sleep period until this value.
+
+=head2 get_visibility_timeout, set_visibility_timeout
+
+=head2 create_sqs_message
+
+ create_sqs_message( options )
+
+Creates a formatted message that can be sent to an SQS queue.
+
+C<options> is a hash of key/value pairs specific to the message. You
+should at least have an C<event> key defined.
+
+Example:
+
+ my $payload = create_sqs_message( event => 'process', key => 'spool/52/foo.jpg', account => 52);
+
+I<This method can also be called as a class method.>
+
+ use SQS::Queue::Worker qw(crate_sqs_message);
+
+ create_sqs_message(message-body)
+
+If you pass a reference it will be formatted as a JSON string.
+
+=head2 delete_message
+
+ delete_message( message )
+
+Deletes an SQS message from the queue.
+
+=head2 parse_message
+
+ parse_message()
+
+Returns a hash reference containing the parameters passed in the
+message. Message parameters are passed as CGI query strings or a JSON
+object.
+
+I<This method can also be called as a class method.>
+
+ use SQS::Queue::Worker qw(parse_message);
+
+ parse_message(message-body)
+
+=head2 read_message
+
+ read_message()
+
+Returns an SQS message body or C<undef>.
+
+=head2 get_last_message
+
+ get_last_message()
+
+Returns the last message read.
+
+=head2 send_message
+
+ send_message( message );
+
+Sends a message on the current current queue.
+
+=head2 change_message_visibility
+
+ change_message_visibility( message, timeout );
+
+Changes the message visibility so that the message will not be
+available for a given number of seconds.  We typically use this when
+we have reached the maxium number of messages we want to process at
+one time for a queue and want to tell delay the availabity of this
+message for some time.
+
+=head2 handler
+
+ handler
+
+You should implement a handler.
+
+=head1 SEE OTHER
+
+L<Amazon::API::SQS>, L<Proc::Daemon>
+
+=head1 AUTHOR
+
+Rob Lauer - <rclauer@gmail.com>
+
+=head1 LICENSE
+
+Copyright (c) 2025 TBC Development Group, LLC. All rights
+reserved. This program is free software; you can redistribute it
+and/or modify it under the same terms as Perl itself.
+
+=cut

@@ -1,0 +1,57 @@
+Wed Jun 18 09:06:10 2025  Rob Lauer  <rlauer6@comcast.net>
+
+	[1.0.0]:
+	* VERSION: new
+	* buildspec.yml
+	- Worker, not Processor
+	- remove postamble for now
+	* t/00-sqs-queue_worker.t: renamed
+	* README: generated
+	* .gitignore: add *.pm, modified
+	* Makefile
+	- add recipe for building from .in files
+	* lib/SQS/Queue/Constants.pm.in: new
+	* bin/sqs-queue-processor.pl
+	- move constants to SQS::Queue::Constants
+	- move $VERSION to same
+	- more options, log-path, log-level, max-children, poll-interval, max-sleep-period
+	(main)
+	- use getters to get message id and message body
+	- delete '-' version of options
+	- fetch config file up front since we need some values prior to calling new()
+	- try to find the log filename if we did not create the log file
+	- bail if we are already running
+	* lib/SQS/Queue/Worker.pm.in
+	- renamed from .pm
+	- pod tweaks and updates
+	(fetch_config)
+	- JSON or YAML
+	- export create_message, parse_message
+	(new)
+	- config, not config_file
+	(init_logger): use $LOG4PERL_LEVELS
+	(create_sqs_message)
+	- class or instance method
+	- refactored using pairs()
+	(parse_message)
+	- class or instance method
+	(read_message)
+	- unload message payload into class attributes
+	(delete_message)
+	- use getters/setters
+	(change_message_visibility): likewise
+
+Tue Jun 17 15:56:42 2025  Rob Lauer  <rlauer6@comcast.net>
+
+	[BigBang]:
+	* .gitignore: new
+	* ChangeLog: new
+	* Makefile: new
+	* README.md: new
+	* bin/sqs-queue-processor.pl: new
+	* buildspec.yml: new
+	* lib/SQS/Queue/Worker.pm: new
+	* requires: new
+	* t/00-sqs-queue-processor.t: new
+	* test-requires: new
+

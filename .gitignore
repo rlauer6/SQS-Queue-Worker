@@ -3,3 +3,5 @@ provides
 *.tmp
 extra-files
 resources
+lib/SQS/Queue/*.pm
+modified

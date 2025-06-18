@@ -13,33 +13,12 @@ use Proc::Daemon;
 use Proc::PID::File;
 use Pod::Usage;
 use SQS::Queue::Worker;
+use SQS::Queue::Constants qw(:all);
 use URI::Escape;
 
-use Readonly;
-
-Readonly our $DEFAULT_MAX_CHILDREN       => 5;
-Readonly our $DEFAULT_VISIBILITY_TIMEOUT => 60;
-Readonly our $DEFAULT_REDIS_PORT         => 6379;
-Readonly our $DEFAULT_POLL_INTERVAL      => 2;
-Readonly our $DEFAULT_MAX_SLEEP_PERIOD   => 60;
-
-Readonly our $TRUE  => 1;
-Readonly our $FALSE => 0;
-
-Readonly our $SUCCESS => 0;
-Readonly our $FAILURE => 1;
-
-Readonly our $LOG4PERL_CONF => qq(
-  log4perl.rootLogger = INFO, LOGFILE
-  log4perl.appender.LOGFILE = Log::Log4perl::Appender::File
-  log4perl.appender.LOGFILE.filename = %s
-  log4perl.appender.LOGFILE.mode = append
-  log4perl.appender.LOGFILE.layout = PatternLayout
-  log4perl.appender.LOGFILE.layout.ConversionPattern = [%%d] %%p %%m%%n
-);
-
 our %PID_LIST;
-our $VERSION = '@PACKAGE_VERSION@';
+
+our $VERSION = $SQS::Queue::Worker::Constants::VERSION;
 
 ########################################################################
 sub setup_signal_handlers {
@@ -174,15 +153,19 @@ sub get_options {
 
   my @options_specs = qw(
     config|C=s
+    daemonize|D!
     endpoint-url|u=s
     help|h
+    log-path|L
+    log-level|l
+    max-children|m=s
+    max-sleep-period|M=i
+    poll-interval|P=s
     queue-url|q=s
     redis-port|p=i
     redis-server|R=s
-    worker|w=s
-    poll-interval|P=s
     visibility-timeout|V=i
-    daemonize|D!
+    worker|w=s
   );
 
   GetOptions( \%options, @options_specs )
@@ -195,7 +178,7 @@ sub get_options {
   foreach my $k ( keys %options ) {
     next if $k !~ /\-/xsm;
 
-    my $v = $options{$k};
+    my $v = delete $options{$k};
     $k =~ s/\-/_/gxsm;
 
     $options{$k} = $v;
@@ -222,6 +205,13 @@ sub main {
 ########################################################################
   my %options = get_options();
 
+  my $config = eval {
+    return {}
+      if !$options{config};
+
+    return fetch_config( $options{config} );
+  };
+
   my $queue_handler = init_handler( \%options );
 
   set_defaults(
@@ -231,11 +221,16 @@ sub main {
     visibility_timeout => $DEFAULT_VISIBILITY_TIMEOUT,
     max_sleep_period   => $DEFAULT_MAX_SLEEP_PERIOD,
     daemonize          => $FALSE,
+    log_path           => $DEFAULT_LOG_PATH,
+    %{$config}
+
   );
 
+  my $logfile;
+
   # if daemon, then log to file
-  if ( $options{daemonize} ) {
-    my $logfile       = sprintf '/var/log/sqs-%s', basename( $queue_handler->get_queue_url );
+  if ( $options{daemonize} && !$config->{log4perl_conf} ) {
+    $logfile = sprintf '%s/sqs-%s', $queue_handler->get_log_path, basename( $queue_handler->get_queue_url );
     my $log4perl_conf = sprintf $LOG4PERL_CONF, $logfile;
 
     $queue_handler->set_log4perl_conf( \$log4perl_conf );
@@ -248,27 +243,45 @@ sub main {
 
   setup_signal_handlers( \$keep_going, $queue_handler );
 
-  my $pid = Proc::Daemon::Init;
+  my $queue_name = basename( $options{queue_url} );
 
-  if ( $pid && $options{daemonize} ) {
-    print {*STDERR} sprintf 'daemon successfully launched with pid: %s', $pid;
-    return 0;
+  my $pidfile = sprintf 'sqs-%s', $queue_name;
+
+  if ( $options{daemonize} && Proc::PID::File->running( name => $pidfile ) ) {
+    # TODO check process id against process table
+    print {*STDERR} sprintf 'handler for %s already running.', $queue_name;
+
+    return $SUCCESS;
+  }
+
+  if ( $options{daemonize} ) {
+    my $pid = Proc::Daemon::Init;
+
+    if ($pid) {
+      print {*STDERR} sprintf "daemon successfully launched with pid: %s\n", $pid;
+      return $SUCCESS;
+    }
   }
 
   $queue_handler->init();
 
   my $logger = $queue_handler->get_logger;
 
-  my $queue_name = basename( $queue_handler->get_queue_url );
+  # if the user provided a log4perl configuration we may not know the
+  # logfile name yet
+  if ( $options{daemonize} && !$logfile ) {
+    my $appender = $logger->appender_by_name('LOGFILE');
 
-  my $pidfile = sprintf 'sqs-%s', $queue_name;
+    if ($appender) {
+      $logfile = $appender->{filename};
+    }
+  }
 
-  # if already running, then exit
-  if ( Proc::PID::File->running( name => $pidfile ) ) {
-    # TODO check process id against process table
-    print {*STDERR} sprintf 'handler for %s already running.', $queue_name;
-
-    return $SUCCESS;
+  # when we forked, the Proc::Daemon::Init closed STDERR, STDOUT, so
+  # we need to reopen STDERR if we want error messages to end up in
+  # the logs
+  if ( $options{daemonize} && $logfile ) {
+    open STDERR, '>>', $logfile;
   }
 
   set_reaper($logger);
@@ -286,8 +299,10 @@ sub main {
   $logger->info( sprintf ' ------------------------------------' );
   $logger->info( sprintf ' Queue "%s" handler initialized with:', $queue_name );
   $logger->info( sprintf ' ------------------------------------' );
+  $logger->info( sprintf ' Version............[%s]', $VERSION );
   $logger->info( sprintf ' Process ID.........[%d]', $PID );
   $logger->info( sprintf ' Queue name.........[%s]', $queue_name );
+  $logger->info( sprintf ' Worker.............[%s]', $queue_handler->get_worker );
   $logger->info( sprintf ' SQS queue URL......[%s]', $queue_url );
   $logger->info( sprintf ' Max children.......[%d]', $max_children );
   $logger->info( sprintf ' Poll interval......[%d]', $poll_interval );
@@ -299,24 +314,21 @@ sub main {
 
   while ($keep_going) {
 
-    $logger->info( sprintf 'Reading queue...[%s]', $queue_name );
+    $logger->info( sprintf 'Reading queue [%s]...next read in [%s] seconds', $queue_name, $sleep );
 
-    my $message_list = $queue_handler->read_message();
+    my $message = $queue_handler->read_message();
 
-    if ( $message_list && @{$message_list} ) {
-      $logger->info( Dumper [$message_list] );
-
-      my $message = $message_list->[0];
-
+    if ($message) {
       # handle message
-      $message_id = $message->{MessageId};
+      $message_id = $queue_handler->get_message_id;
 
-      $logger->info( sprintf 'id: %s', $message_id );
+      $logger->info( sprintf 'Message [%s] received...dispatching...', $message_id );
+      $logger->debug( Dumper [$message] );
 
       # ignore message if duplicate and we are using Redis to enforce
       # idempotency of messages (SETNX = set if key does not exist)
       if ($redis) {
-        if ( $redis->setnx( $message_id, $message->{Body} ) ) {
+        if ( $redis->setnx( $message_id, $queue_handler->get_body ) ) {
           $redis->expire( $message_id, $retry_timeout );
         }
         else {
@@ -325,15 +337,13 @@ sub main {
         }
       }
 
-      $logger->info('Message received...dispatching...');
-
       # check to see if we have spawned the max number of children yet,
       # if so let's put this message on ice for a few seconds.
       if ( scalar( keys %PID_LIST ) >= $max_children ) {
         $logger->info( sprintf 'max number of children [%d] reached, rejecting message...', $max_children );
+        $logger->info("changing timeout to: [$retry_timeout]");
 
-        $logger->info("changing timeout [$retry_timeout]");
-        $queue_handler->change_message_visibility( $message, $retry_timeout );
+        $queue_handler->change_message_visibility($retry_timeout);
 
         next;
       }
@@ -347,10 +357,10 @@ sub main {
       if ( $pid == 0 ) {
 
         eval {
-          if ( $queue_handler->handler($message) ) {
-            $logger->info('successfully processed message...deleting message');
+          if ( $queue_handler->handler() ) {
+            $logger->info( 'successfully processed message...deleting message', $message_id );
 
-            $queue_handler->delete_message($message);
+            $queue_handler->delete_message();
           }
           else {
             $logger->error( sprintf 'message not handled: %s ', Dumper( [$message] ) );
@@ -403,7 +413,7 @@ __END__
 
 sqs-queue-processor.pl - harness for SQS queue handlers
 
-=head1 SYNOPSIS
+=head1 USAGE
 
  sqs-queue-processor.pl Options
 
@@ -411,12 +421,58 @@ Example:
 
  sqs-queue-processor.pl --config-file=my-worker.cfg
 
-=head1 OPTIONS
+=head2 Options
 
- --help, -h          this help message
- --redis-server, -R  Redis host if using Redis for idempotent message handling
- --redis-port, -p    Redis port (default: 6379)
- --config, -C        path to the config file (see note below)
+ --config, -C             configuration file
+ --config, -C             path to the config file (see note below)
+ --daemonize, -D          daemonize the process
+ --endpoint-url, -u       endpoint URL if using a mocking service like LocalStack
+ --help, -h               this help message
+ --max-children, -m       maximum number of simultaneous workers that will be forked, default: 5
+ --max-sleep-period, -M   maximum amount of time process will sleep when no messages are present, default: 30
+ --poll-interval, -P      polling interval in seconds, default: 2
+ --queue-url, -q          the AWS queue url
+ --redis-port, -p         Redis port (default: 6379)
+ --redis-server, -R       Redis host if using Redis for idempotent message handling (optional)
+ --visibility-timeout, V  number of seconds before a message becomes available again, default: 60
+ --worker, -w             suffix of the worker module, e.g. MyWorker
+
+=head2 Notes
+
+=over 5
+
+=item 1. Worker classes should be name SQS::Queue::Worker::{worker-name}
+
+=item 2. The default log file when you daemonize the process will is /var/log/sqs-{queue-name}.log
+
+=item 3. If no messages are on the queue, the process will sleep for
+the poll interval time. If no messages are found after sleeping, then
+the sleep time is incremented by the poll interval amount until
+max-sleep-period is reached. After a message is received the sleep
+time is reset to the poll interval time.
+
+=item 4. If the max children have been spawned, messages are put back
+on the queue by resetting their visibility timeout value.
+
+=item 5. If no worker is defined, the default worker will log messages
+and delete them from the queue
+
+=item 6. Any of the options can be placed in a configuration file
+which should in JSON format. Underscores in place of '-'
+in your JSON file.
+
+=item 7. Amazon credentials are discovered for you using the
+Amazon::Credentials module
+
+=item 8. See perldoc SQS::Queue::Workder for more details.
+
+=item 9. The initial visibility timeout was determined when you
+created the queue. If you reject the message by returning a false
+value from your handler, the message will appear again after that
+timeout. If in your handler you want to change that value, use the
+C<change_message_visibility> method and return a false value.
+
+=back
 
 =head1 DESCRIPTION
 
@@ -428,7 +484,16 @@ A queue handler is a class named according to the convention:
 
  SQS::Queue::Worker::{name}
 
-Your handler class should subclass L<SQS:Queue::Worker>.
+Your handler class should subclass L<SQS:Queue::Worker> and implement
+at least a C<handler()> method. The method will receive the message as
+hash reference.
+
+    {
+    'ReceiptHandle' => 'NDE1NmMxY2ItYzJjMi00MzUxLTllYTgtZDk2NTJiODQ2NjhjIGFybjphd3M6c3FzOnVzLWVhc3QtMTowMDAwMDAwMDAwMDA6ZnVtYW5xdWV1ZSA0MTcwOTg3OS0wMTIyLTRmZTgtYTJiYS05MTY0ZGEyZDk3ODMgMTc1MDE5MjQzMi41Njc4NTQ=',
+    'MD5OfBody' => 'acbd18db4cc2f85cedef654fccc4a4d8',
+    'MessageId' => '41709879-0122-4fe8-a2ba-9164da2d9783',
+    'Body' => 'foo'
+  }
 
 =head USING REDIS TO ENFORCE IDEMPOTENCY
 
@@ -464,7 +529,16 @@ to be handled.
 B<TBD: Create a test for verifying proper handling of duplicate
 messages.>
 
-=head1 CONFIGURATION
+=head1 DAEMONIZING YOUR HANDLER
+
+Your handler can run from the terminal or you can daemonize the
+process using the C<--daemonize> option at startup. When you daemonize
+the handler, logs are written to C</var/log/sqs-{queue-name}> by
+default so you probably want to run this process as root. If you don't
+want to run as root and want to daemonize the process, set the log
+path using the C<--log-path> option.
+
+ sudo sqs-queue-processor.pl --config /etc/sqs-queue-processor/fumanque --daemonize
 
 =head1 SEE ALSO
 

@@ -1,0 +1,79 @@
+package SQS::Queue::Constants;
+
+use strict;
+use warnings;
+
+use Log::Log4perl::Level;
+
+use parent qw(Exporter);
+
+our $VERSION = '@PACKAGE_VERSION@';
+
+use Readonly;
+
+# queue attributes
+Readonly::Scalar our $DEFAULT_MAX_CHILDREN       => 5;
+Readonly::Scalar our $DEFAULT_VISIBILITY_TIMEOUT => 60;
+Readonly::Scalar our $DEFAULT_REDIS_PORT         => 6379;
+Readonly::Scalar our $DEFAULT_POLL_INTERVAL      => 2;
+Readonly::Scalar our $DEFAULT_MAX_SLEEP_PERIOD   => 30;
+
+# defaults
+Readonly our $DEFAULT_LOG_PATH => '/var/log';
+
+# booleans
+Readonly::Scalar our $TRUE    => 1;
+Readonly::Scalar our $FALSE   => 0;
+Readonly::Scalar our $SUCCESS => 0;
+Readonly::Scalar our $FAILURE => 1;
+
+# log4perl
+Readonly::Scalar our $LOG4PERL_CONF => qq(
+  log4perl.rootLogger = INFO, LOGFILE
+  log4perl.appender.LOGFILE = Log::Log4perl::Appender::File
+  log4perl.appender.LOGFILE.filename = %s
+  log4perl.appender.LOGFILE.mode = append
+  log4perl.appender.LOGFILE.layout = PatternLayout
+  log4perl.appender.LOGFILE.layout.ConversionPattern = [%%d] %%p %%m%%n
+);
+
+Readonly::Hash our %LOG4PERL_LEVELS => (
+  trace => $TRACE,
+  debug => $DEBUG,
+  warn  => $WARN,
+  info  => $INFO,
+  error => $ERROR,
+);
+
+# chars
+Readonly::Scalar our $AMPERSAND => q{&};
+Readonly::Scalar our $EMPTY     => q{};
+
+our %EXPORT_TAGS = (
+  'queue-attributes' => [
+    qw(
+      $DEFAULT_MAX_CHILDREN
+      $DEFAULT_VISIBILITY_TIMEOUT
+      $DEFAULT_REDIS_PORT
+      $DEFAULT_POLL_INTERVAL
+      $DEFAULT_MAX_SLEEP_PERIOD
+    )
+  ],
+  booleans => [
+    qw(
+      $TRUE
+      $FALSE
+      $SUCCESS
+      $FAILURE
+    )
+  ],
+  defaults => [qw($DEFAULT_LOG_PATH)],
+  chars    => [qw($AMPERSAND $EMPTY)],
+  log4perl => [qw(%LOG4PERL_LEVELS $LOG4PERL_CONF)],
+);
+
+our @EXPORT_OK = map { @{ $EXPORT_TAGS{$_} } } keys %EXPORT_TAGS;
+
+$EXPORT_TAGS{all} = [@EXPORT_OK];
+
+1;

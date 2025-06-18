@@ -5,7 +5,7 @@ use warnings;
 
 use Test::More;
 
-use_ok('SQS::Queue::Processor');
+use_ok('SQS::Queue::Worker');
 
 done_testing;
 

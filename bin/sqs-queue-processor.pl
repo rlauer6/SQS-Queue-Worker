@@ -243,7 +243,7 @@ sub main {
 
   setup_signal_handlers( \$keep_going, $queue_handler );
 
-  my $queue_name = basename( $options{queue_url} );
+  my $queue_name = basename( $queue_handler->get_queue_url );
 
   my $pidfile = sprintf 'sqs-%s', $queue_name;
 

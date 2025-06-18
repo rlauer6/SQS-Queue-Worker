@@ -36,13 +36,13 @@ This documentation refers to version 1.0.0.
 
 This base class is one element in a simple architecture to handle
 messages from the SQS queue. Follow the cookbook below to implement
-additional handlers for your workflow.
+handlers for your workflow.
 
-- 1. Create an SQS queue
+- Create an SQS queue
 
     Using the CLI or console create an SQS queue.
 
-- 2. Configure the queue
+- Configure the queue
 
     You can specify various default behaviors for the queue with regard to
     the timing of messages on the AWS Management Console.
@@ -69,7 +69,7 @@ additional handlers for your workflow.
         you have some rogue program that is inadervantly bombarding your
         application with messages.
 
-- 3. Create a configuration file
+- Create a configuration file
 
     A configuration file can be used to specify the AWS parameters
     including queue definitions. It can be in YAML or JSON format.
@@ -94,7 +94,7 @@ additional handlers for your workflow.
     the visibility timeout and the `Log::Log4perl` parameters if you'd
     like - they should match what you have configured on the console.
 
-- 4. Design your messages
+- Design your messages
 
     Messages are expected to be formatted as query string arguments or
     JSON payloads. Use the `parse_message()` method to create a hash of
@@ -102,7 +102,7 @@ additional handlers for your workflow.
     or a JSON payload you can get the message body using the `get_body()`
     method.
 
-- 5. Write your handler
+- Write your handler
 
     You use the `SQS::Queue::Worker` as your base class and provide your
     own implemenation of the `handler()` method. See ["SYNOPSIS"](#synopsis). Handler classes should be name using the convention:
@@ -116,7 +116,7 @@ additional handlers for your workflow.
     queue. Returning a false value will cause the message to re-appear in
     the queue after the visibility timeout has elapsed.
 
-- 6. Daemonize your handler
+- Daemonize your handler
 
     The Perl script `sqs-queue-processor.pl` acts as a
     driver for reading the queue and deliverying messages to your handler.
@@ -124,8 +124,6 @@ additional handlers for your workflow.
     `worker` value in your configuration.
 
         sudo sqs-queue-processor.pl --config /etc/sqs-fumanqueue.yml
-
-- TBD - systemctl invocataion
 
 # METHODS AND SUBROUTINES
 

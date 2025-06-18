@@ -19,9 +19,9 @@ use Log::Log4perl::Level;
 use Query::Param;
 use Scalar::Util qw(blessed);
 use SQS::Queue::Constants qw(:all);
-use YAML::Tiny;
+use YAML::Tiny qw(LoadFile);
 
-our $VERSION = $SQS::Queue::Constants::VERSION;
+our $VERSION = '@PACKAGE_VERSION@';
 
 __PACKAGE__->follow_best_practice;
 __PACKAGE__->mk_accessors(
@@ -70,7 +70,7 @@ sub fetch_config {
 
   close $fh;
 
-  my $config = $content =~ /^\s*[{]/xsm ? from_json($content) : YAML::Tiny->read($config_file);
+  my $config = $content =~ /^\s*[{]/xsm ? from_json($content) : LoadFile($config_file);
 
   if ( $config->{log4perl_conf} && ref $config->{log4perl_conf} ) {
     $config->{log4perl_conf} = join "\n", @{ $config->{log4perl_conf} };
@@ -120,7 +120,7 @@ sub init {
 
   my $sqs_client = Amazon::API::SQS->new(
     logger    => $self->get_logger,
-    log_level => $self->get_log_level,
+    log_level => $ENV{AWS_API_LOGLEVEL} // 'info',
     url       => $self->get_endpoint_url
   );
 
@@ -333,15 +333,15 @@ This documentation refers to version @PACKAGE_VERSION@.
 
 This base class is one element in a simple architecture to handle
 messages from the SQS queue. Follow the cookbook below to implement
-additional handlers for your workflow.
+handlers for your workflow.
 
 =over 5
 
-=item 1. Create an SQS queue
+=item Create an SQS queue
 
 Using the CLI or console create an SQS queue.
 
-=item 2. Configure the queue
+=item Configure the queue
 
 You can specify various default behaviors for the queue with regard to
 the timing of messages on the AWS Management Console.
@@ -372,7 +372,7 @@ application with messages.
 
 =back
 
-=item 3. Create a configuration file
+=item Create a configuration file
 
 A configuration file can be used to specify the AWS parameters
 including queue definitions. It can be in YAML or JSON format.
@@ -397,7 +397,7 @@ The important element here is the C<queue_url>.  You can also override
 the visibility timeout and the C<Log::Log4perl> parameters if you'd
 like - they should match what you have configured on the console.
 
-=item 4. Design your messages
+=item Design your messages
 
 Messages are expected to be formatted as query string arguments or
 JSON payloads. Use the C<parse_message()> method to create a hash of
@@ -405,7 +405,7 @@ the message payload. If you don't want to use query string parameters
 or a JSON payload you can get the message body using the C<get_body()>
 method.
 
-=item 5. Write your handler
+=item Write your handler
 
 You use the C<SQS::Queue::Worker> as your base class and provide your
 own implemenation of the C<handler()> method. See L</SYNOPSIS>. Handler classes should be name using the convention:
@@ -419,7 +419,7 @@ whether the message was handled properly and can be deleted from the
 queue. Returning a false value will cause the message to re-appear in
 the queue after the visibility timeout has elapsed.
 
-=item 6. Daemonize your handler
+=item Daemonize your handler
 
 The Perl script F<sqs-queue-processor.pl> acts as a
 driver for reading the queue and deliverying messages to your handler.
@@ -427,8 +427,6 @@ It does this by instantiating your Perl class based on the argument
 C<worker> value in your configuration.
 
  sudo sqs-queue-processor.pl --config /etc/sqs-fumanqueue.yml
-
-=item TBD - systemctl invocataion
 
 =back
 

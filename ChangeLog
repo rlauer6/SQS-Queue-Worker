@@ -1,3 +1,17 @@
+Wed Jun 18 16:28:41 2025  Rob Lauer  <rlauer6@comcast.net>
+
+	[1.0.1]:
+	* VERSION: bump
+	* README.md: generated
+	* bin/sqs-queue-processor.pl
+	(main)
+	- get queue_url from getter
+	* lib/SQS/Queue/Worker.pm.in
+	- pod tweaks
+	(fetch_config)
+	- use LoadFile, not read()
+	(init): don't use log_level for Amazon::API::SQS
+
 Wed Jun 18 09:06:10 2025  Rob Lauer  <rlauer6@comcast.net>
 
 	[1.0.0]:

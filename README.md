@@ -30,7 +30,7 @@ Service (SQS) message handlers.
 
 # VERSION
 
-This documentation refers to version 1.0.0.
+This documentation refers to version 1.0.2.
 
 # NOTES
 

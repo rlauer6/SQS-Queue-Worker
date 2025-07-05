@@ -4,6 +4,7 @@ use strict;
 use warnings;
 
 use Carp;
+use Cwd qw(cwd);
 use Data::Dumper;
 use English qw(-no_match_vars);
 use File::Basename qw(basename);
@@ -18,7 +19,7 @@ use URI::Escape;
 
 our %PID_LIST;
 
-our $VERSION = $SQS::Queue::Worker::Constants::VERSION;
+our $VERSION = '@PACKAGE_VERSION@';
 
 ########################################################################
 sub setup_signal_handlers {
@@ -31,7 +32,7 @@ sub setup_signal_handlers {
     ${$keep_going} = $TRUE;
 
     # re-read config
-    my $config = fetch_config( $queue_handler->get_config_file );
+    my $config = fetch_config( $queue_handler->get_config );
     $queue_handler->merge_config($config);
 
     return;
@@ -123,9 +124,15 @@ sub init_handler {
   my $handler_class = $worker ? "SQS::Queue::Worker::$worker" : 'SQS::Queue::Worker';
 
   my $handler = eval {
+
     require_module $handler_class;
 
-    return $handler_class->new( config_file => $config_path, %{$options} );
+    my $handler = $handler_class->new( config => $config_path, %{$options} );
+
+    croak "class $handler_class is not a SQS::Queue::Worker\n"
+      if !$handler->isa('SQS::Queue::Worker');
+
+    return $handler;
   };
 
   croak "could not instantiate worker: $handler_class\n$EVAL_ERROR"
@@ -201,18 +208,55 @@ sub set_defaults {
 }
 
 ########################################################################
+sub reopen_stderr {
+########################################################################
+  my ( $logger, $logfile ) = @_;
+
+  if ( !$logfile ) {
+    my $appender = Log::Log4perl->appender_by_name('LOGFILE');
+
+    if ( $appender && ref $appender ) {
+      $logfile = $appender->{filename};
+    }
+
+    if ( !$logfile ) {
+      $logger->error('unable to determine logfile path');
+      exit $FAILURE;
+    }
+  }
+
+  $logger->info( sprintf 'attempting to reopen STDERR to: [%s]', $logfile );
+
+  eval { open STDERR, '>>', $logfile or die "Can't reopen STDERR: $OS_ERROR\n"; };
+
+  if ($EVAL_ERROR) {
+    $logger->error( sprintf 'unable to reopen STDERR: %s', $EVAL_ERROR );
+    exit $FAILURE;
+  }
+
+  STDERR->autoflush($TRUE);
+
+  print {*STDERR} "STDERR appending to $logfile\n";
+
+  return;
+}
+
+########################################################################
 sub main {
 ########################################################################
   my %options = get_options();
 
   my $config = eval {
-    return {}
-      if !$options{config};
+    my $config_file = delete $options{config};
 
-    return fetch_config( $options{config} );
+    return {}
+      if !$config_file;
+
+    return fetch_config($config_file);
   };
 
-  my $queue_handler = init_handler( \%options );
+  # command line options should override config file options
+  my $queue_handler = init_handler( { %{$config}, %options } );
 
   set_defaults(
     $queue_handler,
@@ -223,14 +267,16 @@ sub main {
     daemonize          => $FALSE,
     log_path           => $DEFAULT_LOG_PATH,
     %{$config}
-
   );
 
   my $logfile;
 
   # if daemon, then log to file
   if ( $options{daemonize} && !$config->{log4perl_conf} ) {
-    $logfile = sprintf '%s/sqs-%s', $queue_handler->get_log_path, basename( $queue_handler->get_queue_url );
+
+    $logfile = sprintf '%s/sqs-%s.log', $queue_handler->get_log_path, basename( $queue_handler->get_queue_url );
+    print {*STDERR} "no log4perl_conf found in config...setting to $logfile\n";
+
     my $log4perl_conf = sprintf $LOG4PERL_CONF, $logfile;
 
     $queue_handler->set_log4perl_conf( \$log4perl_conf );
@@ -247,8 +293,9 @@ sub main {
 
   my $pidfile = sprintf 'sqs-%s', $queue_name;
 
-  if ( $options{daemonize} && Proc::PID::File->running( name => $pidfile ) ) {
-    # TODO check process id against process table
+  my $pid_dir = $EFFECTIVE_USER_ID ? cwd : $EMPTY;
+
+  if ( $options{daemonize} && Proc::PID::File->running( name => $pidfile, dir => $pid_dir ) ) {
     print {*STDERR} sprintf 'handler for %s already running.', $queue_name;
 
     return $SUCCESS;
@@ -257,8 +304,10 @@ sub main {
   if ( $options{daemonize} ) {
     my $pid = Proc::Daemon::Init;
 
+    Proc::PID::File->new( name => $pidfile, dir => $pid_dir );
+
     if ($pid) {
-      print {*STDERR} sprintf "daemon successfully launched with pid: %s\n", $pid;
+      print {*STDERR} sprintf "daemon successfully launched with pid: [%d]\n", $pid;
       return $SUCCESS;
     }
   }
@@ -267,21 +316,11 @@ sub main {
 
   my $logger = $queue_handler->get_logger;
 
-  # if the user provided a log4perl configuration we may not know the
-  # logfile name yet
-  if ( $options{daemonize} && !$logfile ) {
-    my $appender = $logger->appender_by_name('LOGFILE');
-
-    if ($appender) {
-      $logfile = $appender->{filename};
-    }
-  }
-
   # when we forked, the Proc::Daemon::Init closed STDERR, STDOUT, so
   # we need to reopen STDERR if we want error messages to end up in
   # the logs
-  if ( $options{daemonize} && $logfile ) {
-    open STDERR, '>>', $logfile;
+  if ( $options{daemonize} ) {
+    reopen_stderr( $logger, $logfile );
   }
 
   set_reaper($logger);
@@ -358,7 +397,7 @@ sub main {
 
         eval {
           if ( $queue_handler->handler() ) {
-            $logger->info( 'successfully processed message...deleting message', $message_id );
+            $logger->info( sprintf 'successfully processed message...deleting message: %s', $message_id );
 
             $queue_handler->delete_message();
           }

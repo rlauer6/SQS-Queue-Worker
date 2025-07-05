@@ -5,3 +5,4 @@ extra-files
 resources
 lib/SQS/Queue/*.pm
 modified
+bin/*.pl

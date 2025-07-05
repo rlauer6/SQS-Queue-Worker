@@ -17,6 +17,7 @@ Readonly::Scalar our $DEFAULT_VISIBILITY_TIMEOUT => 60;
 Readonly::Scalar our $DEFAULT_REDIS_PORT         => 6379;
 Readonly::Scalar our $DEFAULT_POLL_INTERVAL      => 2;
 Readonly::Scalar our $DEFAULT_MAX_SLEEP_PERIOD   => 30;
+Readonly::Scalar our $DEFAULT_WAIT_TIME_SECONDS  => 20;
 
 # defaults
 Readonly our $DEFAULT_LOG_PATH => '/var/log';
@@ -56,6 +57,7 @@ our %EXPORT_TAGS = (
       $DEFAULT_VISIBILITY_TIMEOUT
       $DEFAULT_REDIS_PORT
       $DEFAULT_POLL_INTERVAL
+      $DEFAULT_WAIT_TIME_SECONDS
       $DEFAULT_MAX_SLEEP_PERIOD
     )
   ],

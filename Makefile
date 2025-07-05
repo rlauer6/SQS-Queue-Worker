@@ -14,6 +14,10 @@ GPERL_MODULES = $(PERL_MODULES:.pm.in=.pm)
 
 VERSION := $(shell cat VERSION)
 
+%.pl: %.pl.in
+	sed "s/[@]PACKAGE_VERSION[@]/$(VERSION)/g" $< > $@
+	chmod +x $@
+
 %.pm: %.pm.in
 	sed "s/[@]PACKAGE_VERSION[@]/$(VERSION)/g" $< > $@
 
@@ -23,6 +27,7 @@ all: $(TARBALL)
 
 $(GPERL_MODULES): $(PERL_MODULES)
 
+bin/bin/sqs-queue-processor.pl: bin/sqs-queue-processor.pl.in
 
 $(TARBALL): buildspec.yml $(GPERL_MODULES) VERSION requires test-requires bin/sqs-queue-processor.pl README.md
 	for a in $(GPERL_MODULES); do \
@@ -33,5 +38,9 @@ $(TARBALL): buildspec.yml $(GPERL_MODULES) VERSION requires test-requires bin/sq
 README.md: lib/$(MODULE_PATH)
 	pod2markdown $< > $@
 
+include version.mk
+
 clean:
 	rm -f *.tar.gz
+	rm -f $$(find lib -name '*.pm')
+	rm -f $$(find bin -name '*.pl')

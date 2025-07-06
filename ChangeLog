@@ -1,3 +1,15 @@
+Sun Jul  6 10:31:16 2025  Rob Lauer  <rlauer6@comcast.net>
+
+	[1.0.3]:
+	* VERSION: bump
+	* bin/sqs-queue-processor.pl.in
+	(main)
+	- die if we can't read config file
+	- warn on message failure, since this might be intentional
+	* lib/SQS/Queue/Worker.pm.in
+	- + workflow, + wait_time_seconds
+	(send_messaage): new
+
 Sat Jul  5 06:27:56 2025  Rob Lauer  <rlauer6@comcast.net>
 
 	[1.0.2]:

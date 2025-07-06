@@ -30,7 +30,7 @@ Service (SQS) message handlers.
 
 # VERSION
 
-This documentation refers to version 1.0.2.
+This documentation refers to version 1.0.3.
 
 # NOTES
 
@@ -105,7 +105,8 @@ handlers for your workflow.
 - Write your handler
 
     You use the `SQS::Queue::Worker` as your base class and provide your
-    own implemenation of the `handler()` method. See ["SYNOPSIS"](#synopsis). Handler classes should be name using the convention:
+    own implemenation of the `handler()` method. See
+    ["SYNOPSIS"](#synopsis). Handler classes should be named using the convention:
 
         SQS::Queue::Worker::{worker-name}
 
@@ -124,6 +125,15 @@ handlers for your workflow.
     `worker` value in your configuration.
 
         sudo sqs-queue-processor.pl --config /etc/sqs-fumanqueue.yml
+
+# LONG POLLING
+
+By default, the script will read messages from the SQS queue using
+long polling. You can configure the wait time by setting the
+`wait_time_seconds` parameter in the configuration file. If you want
+to disable long polling, set the `wait_time_seconds` to 0.
+
+default: 20s
 
 # METHODS AND SUBROUTINES
 
@@ -223,7 +233,7 @@ Sends a message on the current current queue.
 Changes the message visibility so that the message will not be
 available for a given number of seconds.  We typically use this when
 we have reached the maxium number of messages we want to process at
-one time for a queue and want to tell delay the availabity of this
+one time for a queue and want to delay the availabity of this
 message for some time.
 
 ## handler
@@ -232,7 +242,7 @@ message for some time.
 
 You should implement a handler.
 
-# SEE OTHER
+# SEE ALSO
 
 [Amazon::API::SQS](https://metacpan.org/pod/Amazon%3A%3AAPI%3A%3ASQS), [Proc::Daemon](https://metacpan.org/pod/Proc%3A%3ADaemon)
 

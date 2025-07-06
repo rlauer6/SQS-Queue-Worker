@@ -255,6 +255,9 @@ sub main {
     return fetch_config($config_file);
   };
 
+  croak sprintf "could not read %s\n%s", $options{config}, $EVAL_ERROR
+    if !$config || $EVAL_ERROR;
+
   # command line options should override config file options
   my $queue_handler = init_handler( { %{$config}, %options } );
 
@@ -402,12 +405,14 @@ sub main {
             $queue_handler->delete_message();
           }
           else {
-            $logger->error( sprintf 'message not handled: %s ', Dumper( [$message] ) );
+            $logger->warn( sprintf 'message not handled: %s ', Dumper( [$message] ) );
           }
         };
 
         my $error = $EVAL_ERROR;
 
+        # remove message id from Redis to allow re-processing of
+        # message if it was not handled
         if ($redis) {
           $redis->del($message_id);
         }

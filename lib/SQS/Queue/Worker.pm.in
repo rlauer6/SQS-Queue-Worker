@@ -46,7 +46,9 @@ __PACKAGE__->mk_accessors(
     retry_visibility_timeout
     sqs_client
     visibility_timeout
+    wait_time_seconds
     worker
+    workflow
   )
 );
 
@@ -176,6 +178,24 @@ sub init_logger {
 }
 
 ########################################################################
+sub send_message {
+########################################################################
+  my ( $self, $message ) = @_;
+
+  if ( ref $message ) {
+    $message = create_sqs_message( %{$message} );
+  }
+
+  my $rsp = $self->get_sqs_client->SendMessage(
+    { QueueUrl    => $self->get_queue_url,
+      MessageBody => $message,
+    }
+  );
+
+  return $rsp;
+}
+
+########################################################################
 sub create_sqs_message {
 ########################################################################
   my (@args) = @_;
@@ -229,10 +249,12 @@ sub read_message {
 
   my $sqs_client = $self->get_sqs_client;
 
+  my $wait_time_seconds = $self->get_wait_time_seconds // $DEFAULT_WAIT_TIME_SECONDS;
+
   my $message = $sqs_client->ReceiveMessage(
     { MaxNumberOfMessages => 1,
-      WaitTimeSeconds     => $DEFAULT_WAIT_TIME_SECONDS,
       QueueUrl            => $self->get_queue_url,
+      defined $wait_time_seconds ? ( WaitTimeSeconds => $wait_time_seconds ) : (),
     }
   );
 
@@ -412,7 +434,8 @@ method.
 =item Write your handler
 
 You use the C<SQS::Queue::Worker> as your base class and provide your
-own implemenation of the C<handler()> method. See L</SYNOPSIS>. Handler classes should be name using the convention:
+own implemenation of the C<handler()> method. See
+L</SYNOPSIS>. Handler classes should be named using the convention:
 
  SQS::Queue::Worker::{worker-name}
 
@@ -433,6 +456,15 @@ C<worker> value in your configuration.
  sudo sqs-queue-processor.pl --config /etc/sqs-fumanqueue.yml
 
 =back
+
+=head1 LONG POLLING
+
+By default, the script will read messages from the SQS queue using
+long polling. You can configure the wait time by setting the
+C<wait_time_seconds> parameter in the configuration file. If you want
+to disable long polling, set the C<wait_time_seconds> to 0.
+
+default: 20s
 
 =head1 METHODS AND SUBROUTINES
 
@@ -532,7 +564,7 @@ Sends a message on the current current queue.
 Changes the message visibility so that the message will not be
 available for a given number of seconds.  We typically use this when
 we have reached the maxium number of messages we want to process at
-one time for a queue and want to tell delay the availabity of this
+one time for a queue and want to delay the availabity of this
 message for some time.
 
 =head2 handler
@@ -541,7 +573,7 @@ message for some time.
 
 You should implement a handler.
 
-=head1 SEE OTHER
+=head1 SEE ALSO
 
 L<Amazon::API::SQS>, L<Proc::Daemon>
 
